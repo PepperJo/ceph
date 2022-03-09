@@ -6140,16 +6140,12 @@ extern "C" int rbd_aio_write2(rbd_image_t image, uint64_t off, size_t len,
   return 0;
 }
 
-extern "C" int rbd_aio_writev(rbd_image_t image, const struct iovec *iov,
-                              int iovcnt, uint64_t off, rbd_completion_t c)
+static ssize_t iovec_to_bufferlist(const struct iovec *iov,
+                                   int iovcnt, bufferlist &bl,
+                                   ssize_t &len,
+                                   librbd::io::AioCompletion* aio_completion)
 {
-  librbd::ImageCtx *ictx = (librbd::ImageCtx *)image;
-  librbd::RBD::AioCompletion *comp = (librbd::RBD::AioCompletion *)c;
-
-  // convert the scatter list into a bufferlist
-  auto aio_completion = get_aio_completion(comp);
-  ssize_t len = 0;
-  bufferlist bl;
+  len = 0;
   for (int i = 0; i < iovcnt; ++i) {
     const struct iovec &io = iov[i];
     len += io.iov_len;
@@ -6165,6 +6161,21 @@ extern "C" int rbd_aio_writev(rbd_image_t image, const struct iovec *iov,
   if (iovcnt <= 0 || len < 0) {
     r = -EINVAL;
   }
+
+  return r;
+}
+
+extern "C" int rbd_aio_writev(rbd_image_t image, const struct iovec *iov,
+                              int iovcnt, uint64_t off, rbd_completion_t c)
+{
+  librbd::ImageCtx *ictx = (librbd::ImageCtx *)image;
+  librbd::RBD::AioCompletion *comp = (librbd::RBD::AioCompletion *)c;
+
+  // convert the scatter list into a bufferlist
+  auto aio_completion = get_aio_completion(comp);
+  bufferlist bl;
+  ssize_t len;
+  int r = iovec_to_bufferlist(iov, iovcnt, bl, len, aio_completion);
 
   tracepoint(librbd, aio_write_enter, ictx, ictx->name.c_str(),
              ictx->snap_name.c_str(), ictx->read_only, off, len, NULL,
