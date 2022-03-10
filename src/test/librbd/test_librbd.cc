@@ -2645,6 +2645,132 @@ TEST_F(TestLibRBD, TestScatterGatherIO)
   rbd_aio_release(comp);
   ASSERT_EQ("1111This111111", linear_buffer);
 
+  std::string new_write_buffer("This is new content");
+  struct iovec new_write_iovs[] = {
+    {.iov_base = &new_write_buffer[0],  .iov_len = 5},
+    {.iov_base = &new_write_buffer[5],  .iov_len = 3},
+    {.iov_base = &new_write_buffer[8],  .iov_len = 4},
+    {.iov_base = &new_write_buffer[12], .iov_len = 7}
+  };
+  uint64_t mismatch_off;
+  rbd_aio_create_completion(NULL, NULL, &comp);
+  ASSERT_EQ(-EINVAL, rbd_aio_comparev_and_writev(image, 1<<order, 
+                                                 write_buffer.length(),
+                                                 write_iovs,
+                                                 0,
+                                                 new_write_iovs, 
+                                                 0,
+                                                 comp,
+                                                 &mismatch_off,
+                                                 0));
+  ASSERT_EQ(-EINVAL, rbd_aio_comparev_and_writev(image, 1<<order, 
+                                                 write_buffer.length(),
+                                                 write_iovs,
+                                                 sizeof(write_iovs) / sizeof(struct iovec),
+                                                 new_write_iovs, 
+                                                 0,
+                                                 comp,
+                                                 &mismatch_off,
+                                                 0));
+  ASSERT_EQ(-EINVAL, rbd_aio_comparev_and_writev(image, 1<<order, 
+                                                 write_buffer.length(),
+                                                 write_iovs,
+                                                 0,
+                                                 new_write_iovs, 
+                                                 sizeof(new_write_iovs) / sizeof(struct iovec),
+                                                 comp,
+                                                 &mismatch_off,
+                                                 0));
+  ASSERT_EQ(-EINVAL, rbd_aio_comparev_and_writev(image, 1<<order, 
+                                                 write_buffer.length(),
+                                                 bad_iovs,
+                                                 2,
+                                                 new_write_iovs, 
+                                                 sizeof(new_write_iovs) / sizeof(struct iovec),
+                                                 comp,
+                                                 &mismatch_off,
+                                                 0));
+  ASSERT_EQ(-EINVAL, rbd_aio_comparev_and_writev(image, 1<<order, 
+                                                 write_buffer.length(),
+                                                 write_iovs,
+                                                 sizeof(write_iovs) / sizeof(struct iovec),
+                                                 bad_iovs, 
+                                                 2,
+                                                 comp,
+                                                 &mismatch_off,
+                                                 0));
+  ASSERT_EQ(-EINVAL, rbd_aio_comparev_and_writev(image, 1<<order, 
+                                                 write_buffer.length(),
+                                                 bad_iovs2,
+                                                 1,
+                                                 bad_iovs2,
+                                                 1,
+                                                 comp,
+                                                 &mismatch_off,
+                                                 0));
+  ASSERT_EQ(-EINVAL, rbd_aio_comparev_and_writev(image, 1<<order, 
+                                                 write_buffer.length(),
+                                                 bad_iovs,
+                                                 2,
+                                                 bad_iovs,
+                                                 2,
+                                                 comp,
+                                                 &mismatch_off,
+                                                 0));
+  ASSERT_EQ(-EINVAL, rbd_aio_comparev_and_writev(image, 1<<order, 
+                                                 write_buffer.length(),
+                                                 new_write_iovs,
+                                                 sizeof(new_write_iovs) / sizeof(struct iovec),
+                                                 new_write_iovs, 
+                                                 1,
+                                                 comp,
+                                                 &mismatch_off,
+                                                 0));
+
+  // compare should fail and no data should be written to the image
+  rbd_aio_create_completion(NULL, NULL, &comp);
+  ASSERT_EQ(0, rbd_aio_comparev_and_writev(image, 1<<order, 
+                                           new_write_buffer.length(),
+                                           new_write_iovs /* cmp */,
+                                           sizeof(new_write_iovs) / sizeof(struct iovec),
+                                           new_write_iovs /* write */,
+                                           sizeof(new_write_iovs) / sizeof(struct iovec),
+                                           comp,
+                                           &mismatch_off,
+                                           0));
+  ASSERT_EQ(0, rbd_aio_wait_for_complete(comp));
+  ASSERT_EQ(-EILSEQ, rbd_aio_get_return_value(comp));
+  ASSERT_EQ((1U<<order) + 8U, mismatch_off);
+  rbd_aio_release(comp);
+
+  // read data from the image and check that it is still the same
+  ssize_t read = rbd_read(image, 1<<order, read_buffer.length(), &read_buffer[0]);
+  ASSERT_EQ(read_buffer.length(), read);
+  ASSERT_EQ("This is a test", read_buffer);
+
+  rbd_aio_create_completion(NULL, NULL, &comp);
+  // compare should succeed and new write buffer should be written
+  mismatch_off = 0;
+  ASSERT_EQ(0, rbd_aio_comparev_and_writev(image, 1<<order, 
+                                           new_write_buffer.length(),
+                                           write_iovs /* cmp */,
+                                           sizeof(write_iovs) / sizeof(struct iovec),
+                                           new_write_iovs /* write */,
+                                           sizeof(new_write_iovs) / sizeof(struct iovec),
+                                           comp,
+                                           &mismatch_off,
+                                           0));
+  ASSERT_EQ(0, rbd_aio_wait_for_complete(comp));
+  ASSERT_EQ(0, rbd_aio_get_return_value(comp));
+  ASSERT_EQ(0U, mismatch_off);
+  rbd_aio_release(comp);
+
+  // read data from the image and check that it has been modified
+  std::string new_read_buffer(new_write_buffer.size(), '1');
+  read = rbd_read(image, 1<<order, new_read_buffer.length(), &new_read_buffer[0]);
+  ASSERT_EQ(new_read_buffer.length(), read);
+  ASSERT_EQ("This is new content", new_read_buffer);
+
   ASSERT_PASSED(validate_object_map, image);
   ASSERT_EQ(0, rbd_close(image));
 

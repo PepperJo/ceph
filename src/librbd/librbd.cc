@@ -6351,6 +6351,54 @@ extern "C" ssize_t rbd_aio_compare_and_write(rbd_image_t image, uint64_t off,
   return 0;
 }
 
+extern "C" ssize_t rbd_aio_comparev_and_writev(rbd_image_t image,
+                                                 uint64_t off, size_t len,
+                                                 const struct iovec *cmp_iov,
+                                                 int cmp_iovcnt,
+                                                 const struct iovec *iov,
+                                                 int iovcnt,
+                                                 rbd_completion_t c,
+                                                 uint64_t *mismatch_off,
+                                                 int op_flags)
+{
+  librbd::ImageCtx *ictx = (librbd::ImageCtx *)image;
+  librbd::RBD::AioCompletion *comp = (librbd::RBD::AioCompletion *)c;
+
+  tracepoint(librbd, aio_compare_and_write_enter, ictx, ictx->name.c_str(),
+             ictx->snap_name.c_str(), ictx->read_only, off, len, NULL, NULL,
+             comp->pc, op_flags);
+  
+  auto aio_completion = get_aio_completion(comp);
+  ssize_t cmp_len;
+  int r = get_iovec_length(cmp_iov, cmp_iovcnt, cmp_len);
+  if (r != 0) {
+    tracepoint(librbd, aio_compare_and_write_exit, r);
+    return r;
+  }
+
+  ssize_t write_len;
+  r = get_iovec_length(iov, iovcnt, write_len);
+  if (r != 0) {
+    tracepoint(librbd, aio_compare_and_write_exit, r);
+    return r;
+  }
+
+  // we know that write_len is not negative so it is safe to cast
+  if (static_cast<size_t>(write_len) < len) {
+    tracepoint(librbd, aio_compare_and_write_exit, -EINVAL);
+    return -EINVAL;
+  }
+
+  bufferlist cmp_bl = iovec_to_bufferlist(ictx, cmp_iov, cmp_iovcnt, aio_completion);
+  bufferlist write_bl = iovec_to_bufferlist(ictx, iov, iovcnt, aio_completion);
+  librbd::api::Io<>::aio_compare_and_write(
+    *ictx, aio_completion, off, len, std::move(cmp_bl), std::move(write_bl),
+    mismatch_off, op_flags, false);
+
+  tracepoint(librbd, aio_compare_and_write_exit, 0);
+  return 0;
+}
+
 extern "C" int rbd_invalidate_cache(rbd_image_t image)
 {
   librbd::ImageCtx *ictx = (librbd::ImageCtx *)image;
